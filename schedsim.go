@@ -23,7 +23,22 @@ const (
 	IDLE   = 2
 )
 
+var batchPreemptsLc = 0
+var lcPreemptsBatch = 0
+
 type state int
+
+func (s state) String() string {
+	switch s {
+	case 0:
+		return "RUNNABLE"
+	case 1:
+		return "RUNNING"
+	case 2:
+		return "SLEEPING"
+	}
+	return "unknownl"
+}
 
 const (
 	RUNNABLE = 0
@@ -59,8 +74,8 @@ var lc = &task{
 	state:      RUNNABLE,
 	policy:     NORMAL,
 	weight:     1024,
-	burn:       10 * time.Millisecond,
-	sleep:      30 * time.Millisecond,
+	burn:       100 * time.Millisecond,
+	sleep:      100 * time.Millisecond,
 	wakeup:     make(chan int),
 	preempt:    make(chan int),
 	transition: make(chan int),
@@ -71,8 +86,8 @@ var batch = &task{
 	state:      RUNNABLE,
 	policy:     NORMAL,
 	weight:     1024,
-	burn:       1000 * time.Millisecond,
-	sleep:      0 * time.Millisecond,
+	burn:       100 * time.Millisecond,
+	sleep:      100 * time.Millisecond,
 	wakeup:     make(chan int),
 	preempt:    make(chan int),
 	transition: make(chan int),
@@ -83,18 +98,20 @@ var total_weight = lc.weight + batch.weight
 const NICE_0_LOAD = 1024
 
 func resched_curr() {
-	log.Println("resched_curr", curr)
-	if curr.state != RUNNING {
-		panic("expected RUNNING")
-	}
-	curr.preempt <- 1
-	log.Println("preempt", curr)
-	<-curr.transition
-	if curr.state != RUNNABLE {
-		panic("expected RUNNABLE")
+	log.Println("resched_curr curr =", curr)
+	if curr.state == RUNNING {
+		curr.preempt <- 1
+		log.Println("preempt", curr)
+		<-curr.transition
+		if curr.state == RUNNING {
+			panic("expected not RUNNING got " + curr.state.String())
+		}
 	}
 	next := pick_next_task()
-	set_next_entity(next)
+	log.Println("resched_curr: curr = ", curr, " next = ", next)
+	if next != nil {
+		set_next_entity(next)
+	}
 }
 
 func update_curr() {
@@ -109,7 +126,11 @@ func update_curr() {
 
 func check_preempt_wakeup(curr, new *task) {
 	log.Println("check_preempt_wakeup")
+	if curr == new {
+		return
+	}
 	if curr.policy == IDLE && new.policy != IDLE {
+		log.Println("check_preempt_wakeup: resched becuase curr is IDLE")
 		resched_curr()
 		return
 	}
@@ -121,6 +142,7 @@ func check_preempt_wakeup(curr, new *task) {
 	update_curr()
 
 	if wakeup_preempt_entity(curr, new) {
+		log.Println("check_preempt_wakeup: resched because new waited too long")
 		resched_curr()
 	}
 
@@ -142,11 +164,12 @@ func calc_delta_fair(delta time.Duration, load_weight int) time.Duration {
 }
 
 func pick_next_task() *task {
-	if lc.state == RUNNABLE && batch.vruntime < lc.vruntime {
-		return batch
-	} else {
+	if lc.state == RUNNABLE && lc.vruntime < batch.vruntime {
 		return lc
+	} else if batch.state == RUNNABLE && batch.vruntime < lc.vruntime {
+		return batch
 	}
+	return nil
 }
 
 func sched_slice(task *task) time.Duration {
@@ -156,11 +179,12 @@ func sched_slice(task *task) time.Duration {
 func check_preempt_tick() {
 	log.Println("check_preempt_tick")
 	ideal_runtime := sched_slice(curr)
-	log.Println("check_preempt_tick: ideal_runtime", ideal_runtime)
+	log.Println("check_preempt_tick: ideal_runtime = ", ideal_runtime)
 	delta_exec := curr.sum_exec_runtime - curr.prev_sum_exec_runtime
-	log.Println("check_preempt_tick: delta_exec", delta_exec)
+	log.Println("check_preempt_tick: delta_exec = ", delta_exec)
 	// run too long
 	if delta_exec > ideal_runtime {
+		log.Println("run too long -> resched_curr")
 		resched_curr() // PREEMPT
 		return
 	}
@@ -171,9 +195,14 @@ func check_preempt_tick() {
 	}
 
 	first := pick_next_task()
-	delta := curr.vruntime - first.vruntime
-	if delta > ideal_runtime {
-		resched_curr()
+	if first != nil {
+		log.Println("check_preempt_tick: first =", first)
+		delta := curr.vruntime - first.vruntime
+		log.Println("check_preempt_tick: delta =", delta)
+		if delta > ideal_runtime {
+			log.Println("check_preempt_tick: -> resched_curr becuase first should run now")
+			resched_curr()
+		}
 	}
 }
 
@@ -201,6 +230,13 @@ func burn(task *task) {
 			task.transition <- 1
 			select {
 			case <-task.preempt:
+				log.Println("task", task, "PREEMPTED!")
+				if task == batch {
+					lcPreemptsBatch += 1
+				} else {
+					batchPreemptsLc += 1
+				}
+				task.state = SLEEPING
 				task.transition <- 1
 			case <-time.After(task.burn):
 			}
@@ -218,9 +254,11 @@ func burn(task *task) {
 }
 
 func set_next_entity(task *task) {
+	log.Println("set_next_entity", task)
 	curr = task
 	task.prev_sum_exec_runtime = task.sum_exec_runtime
 	task.exec_start = time.Now()
+	log.Println("wakeup", task)
 	task.wakeup <- 1
 	<-task.transition
 }
@@ -240,5 +278,13 @@ func main() {
 
 	go timerClock()
 
-	time.Sleep(5 * time.Second)
+	time.Sleep(1 * time.Second)
+
+	fmt.Println(lc, "vruntime", lc.vruntime)
+	fmt.Println(batch, "vruntime", batch.vruntime)
+
+	fmt.Println(lc, "sum_exec_time", lc.sum_exec_runtime)
+	fmt.Println(batch, "sum_exec_time", batch.sum_exec_runtime)
+	fmt.Println("batchPreemptsLc", batchPreemptsLc)
+	fmt.Println("lcPreemptsBatch", lcPreemptsBatch)
 }
