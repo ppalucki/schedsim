@@ -1,19 +1,20 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"time"
 )
 
 var (
-	configHZ             = 100
-	timerPeriod          = time.Duration((int(1*time.Second) / configHZ))
-	curr                 *task
-	sched_latency        = time.Duration(24 * time.Millisecond)
-	sched_min_gran       = time.Duration(3 * time.Millisecond)
-	sched_wakeup_gran    = time.Duration(4 * time.Millisecond)
-	NO_WAKEUP_PREEMPTION = false
+	configHZ          = 100
+	timerPeriod       = time.Duration((int(1*time.Second) / configHZ))
+	curr              *task
+	sched_latency     = flag.Duration("sched_latency", 24*time.Millisecond, "")
+	sched_min_gran    = flag.Duration("sched_min_gran", 3*time.Millisecond, "")
+	sched_wakeup_gran = flag.Duration("wakup_gran", 4*time.Millisecond, "")
+	WAKEUP_PREEMPTION = flag.Bool("WAKEUP_PREEMPT", true, "")
 )
 
 type policy int
@@ -26,6 +27,10 @@ const (
 
 var batchPreemptsLc = 0
 var lcPreemptsBatch = 0
+var preemptTick = 0
+var preemptTickTooLong = 0
+var preemptTickFirstNow = 0
+var preemptWakeup = 0
 
 type state int
 
@@ -132,6 +137,7 @@ func check_preempt_wakeup(curr, new *task) {
 	}
 	if curr.policy == IDLE && new.policy != IDLE {
 		log.Println("check_preempt_wakeup: resched becuase curr is IDLE")
+		preemptWakeup += 1
 		resched_curr()
 		return
 	}
@@ -140,7 +146,7 @@ func check_preempt_wakeup(curr, new *task) {
 		return
 	}
 
-	if NO_WAKEUP_PREEMPTION {
+	if !*WAKEUP_PREEMPTION {
 		return
 	}
 
@@ -149,6 +155,7 @@ func check_preempt_wakeup(curr, new *task) {
 	if wakeup_preempt_entity(curr, new) {
 		log.Println("check_preempt_wakeup: resched because new waited too long")
 		log.Println("PREEMPT ", curr)
+		preemptWakeup += 1
 		resched_curr()
 	}
 
@@ -157,7 +164,7 @@ func check_preempt_wakeup(curr, new *task) {
 func wakeup_preempt_entity(curr, new *task) bool {
 	log.Println("wakeup_preempt_entity", curr, new)
 	vdiff := curr.vruntime - new.vruntime
-	gran := calc_delta_fair(sched_wakeup_gran, new.weight)
+	gran := calc_delta_fair(*sched_wakeup_gran, new.weight)
 	log.Println("wakeup_preempt_entity: vdiff = ", vdiff, " gran = ", gran)
 	return vdiff > gran
 }
@@ -180,7 +187,7 @@ func pick_next_task() *task {
 }
 
 func sched_slice(task *task) time.Duration {
-	return __calc_delta(sched_latency, task.weight, total_weight)
+	return __calc_delta(*sched_latency, task.weight, total_weight)
 }
 
 func check_preempt_tick() {
@@ -192,12 +199,14 @@ func check_preempt_tick() {
 	// run too long
 	if delta_exec > ideal_runtime {
 		log.Println("PREEMTP", curr, " - run too long -> resched_curr")
+		preemptTick += 1
+		preemptTickTooLong += 1
 		resched_curr() // PREEMPT
 		return
 	}
 
 	// not to short
-	if delta_exec > sched_min_gran {
+	if delta_exec > *sched_min_gran {
 		return // DONT PREEMPT
 	}
 
@@ -207,6 +216,8 @@ func check_preempt_tick() {
 		delta := curr.vruntime - first.vruntime
 		log.Println("check_preempt_tick: delta =", delta)
 		if delta > ideal_runtime {
+			preemptTick += 1
+			preemptTickFirstNow += 1
 			log.Println("check_preempt_tick: -> resched_curr becuase first should run now")
 			resched_curr()
 		}
@@ -271,6 +282,7 @@ func set_next_entity(task *task) {
 }
 
 func main() {
+	flag.Parse()
 	fmt.Println("timerPeriod =", timerPeriod)
 	go func() {
 		for new := range woken {
@@ -294,4 +306,8 @@ func main() {
 	fmt.Println(batch, "sum_exec_time", batch.sum_exec_runtime)
 	fmt.Println("batchPreemptsLc", batchPreemptsLc)
 	fmt.Println("lcPreemptsBatch", lcPreemptsBatch)
+	fmt.Println("preemptTick", preemptTick)
+	fmt.Println("preemptTickFirstNow", preemptTickFirstNow)
+	fmt.Println("preemptTickTooLong", preemptTickTooLong)
+	fmt.Println("preemptWakeup", preemptWakeup)
 }
