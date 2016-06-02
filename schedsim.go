@@ -7,12 +7,13 @@ import (
 )
 
 var (
-	configHZ          = 100
-	timerPeriod       = time.Duration((int(1*time.Second) / configHZ))
-	curr              *task
-	sched_latency     = time.Duration(24 * time.Millisecond)
-	sched_min_gran    = time.Duration(3 * time.Millisecond)
-	sched_wakeup_gran = time.Duration(4 * time.Millisecond)
+	configHZ             = 100
+	timerPeriod          = time.Duration((int(1*time.Second) / configHZ))
+	curr                 *task
+	sched_latency        = time.Duration(24 * time.Millisecond)
+	sched_min_gran       = time.Duration(3 * time.Millisecond)
+	sched_wakeup_gran    = time.Duration(4 * time.Millisecond)
+	NO_WAKEUP_PREEMPTION = true
 )
 
 type policy int
@@ -136,6 +137,10 @@ func check_preempt_wakeup(curr, new *task) {
 	}
 
 	if new.policy == IDLE || new.policy == BATCH {
+		return
+	}
+
+	if NO_WAKEUP_PREEMPTION {
 		return
 	}
 
