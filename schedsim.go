@@ -7,7 +7,7 @@ import (
 )
 
 var (
-	configHZ          = 10
+	configHZ          = 100
 	timerPeriod       = time.Duration((int(1*time.Second) / configHZ))
 	curr              *task
 	sched_latency     = time.Duration(24 * time.Millisecond)
@@ -73,9 +73,9 @@ var lc = &task{
 	name:       "lc",
 	state:      RUNNABLE,
 	policy:     NORMAL,
-	weight:     1024,
+	weight:     100000,
 	burn:       100 * time.Millisecond,
-	sleep:      100 * time.Millisecond,
+	sleep:      0 * time.Millisecond,
 	wakeup:     make(chan int),
 	preempt:    make(chan int),
 	transition: make(chan int),
@@ -84,10 +84,10 @@ var lc = &task{
 var batch = &task{
 	name:       "batch",
 	state:      RUNNABLE,
-	policy:     NORMAL,
-	weight:     1024,
+	policy:     IDLE,
+	weight:     1,
 	burn:       100 * time.Millisecond,
-	sleep:      100 * time.Millisecond,
+	sleep:      0 * time.Millisecond,
 	wakeup:     make(chan int),
 	preempt:    make(chan int),
 	transition: make(chan int),
@@ -98,7 +98,7 @@ var total_weight = lc.weight + batch.weight
 const NICE_0_LOAD = 1024
 
 func resched_curr() {
-	log.Println("resched_curr curr =", curr)
+	log.Println("-> resched_curr curr =", curr)
 	if curr.state == RUNNING {
 		curr.preempt <- 1
 		log.Println("preempt", curr)
@@ -108,9 +108,9 @@ func resched_curr() {
 		}
 	}
 	next := pick_next_task()
-	log.Println("resched_curr: curr = ", curr, " next = ", next)
 	if next != nil {
 		set_next_entity(next)
+		log.Println("<- resched_curr: curr = ", curr, " next = ", next)
 	}
 }
 
@@ -120,7 +120,7 @@ func update_curr() {
 
 	curr.sum_exec_runtime += delta_exec
 	delta_vruntime := calc_delta_fair(delta_exec, curr.weight)
-	log.Println("update_curr: delta vruntime = ", delta_vruntime)
+	log.Println("update_curr: curr =", curr, "delta vruntime = ", delta_vruntime)
 	curr.vruntime += delta_vruntime
 }
 
@@ -143,6 +143,7 @@ func check_preempt_wakeup(curr, new *task) {
 
 	if wakeup_preempt_entity(curr, new) {
 		log.Println("check_preempt_wakeup: resched because new waited too long")
+		log.Println("PREEMPT ", curr)
 		resched_curr()
 	}
 
@@ -152,6 +153,7 @@ func wakeup_preempt_entity(curr, new *task) bool {
 	log.Println("wakeup_preempt_entity", curr, new)
 	vdiff := curr.vruntime - new.vruntime
 	gran := calc_delta_fair(sched_wakeup_gran, new.weight)
+	log.Println("wakeup_preempt_entity: vdiff = ", vdiff, " gran = ", gran)
 	return vdiff > gran
 }
 
@@ -164,9 +166,9 @@ func calc_delta_fair(delta time.Duration, load_weight int) time.Duration {
 }
 
 func pick_next_task() *task {
-	if lc.state == RUNNABLE && lc.vruntime < batch.vruntime {
+	if lc.state != SLEEPING && lc.vruntime < batch.vruntime {
 		return lc
-	} else if batch.state == RUNNABLE && batch.vruntime < lc.vruntime {
+	} else if batch.state != SLEEPING && batch.vruntime < lc.vruntime {
 		return batch
 	}
 	return nil
@@ -177,14 +179,14 @@ func sched_slice(task *task) time.Duration {
 }
 
 func check_preempt_tick() {
-	log.Println("check_preempt_tick")
+	log.Println("check_preempt_tick: curr = ", curr)
 	ideal_runtime := sched_slice(curr)
 	log.Println("check_preempt_tick: ideal_runtime = ", ideal_runtime)
 	delta_exec := curr.sum_exec_runtime - curr.prev_sum_exec_runtime
 	log.Println("check_preempt_tick: delta_exec = ", delta_exec)
 	// run too long
 	if delta_exec > ideal_runtime {
-		log.Println("run too long -> resched_curr")
+		log.Println("PREEMTP", curr, " - run too long -> resched_curr")
 		resched_curr() // PREEMPT
 		return
 	}
