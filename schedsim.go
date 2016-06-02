@@ -13,7 +13,7 @@ var (
 	sched_latency        = time.Duration(24 * time.Millisecond)
 	sched_min_gran       = time.Duration(3 * time.Millisecond)
 	sched_wakeup_gran    = time.Duration(4 * time.Millisecond)
-	NO_WAKEUP_PREEMPTION = true
+	NO_WAKEUP_PREEMPTION = false
 )
 
 type policy int
